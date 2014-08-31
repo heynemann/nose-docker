@@ -1,0 +1,7 @@
+build:
+    - make setup
+
+base_image: 'dockerfile/python'
+watched:
+    - Makefile
+    - setup.py

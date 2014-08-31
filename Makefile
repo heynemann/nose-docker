@@ -35,3 +35,6 @@ tox:
 
 #docs:
 	#@cd nose_docker/docs && make html && open _build/html/index.html
+
+delete-docker-images:
+	@docker rmi (docker images | grep 'nose-docker' | tr -s ' ' | cut -d ' ' -f 3)

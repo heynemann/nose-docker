@@ -52,6 +52,7 @@ nose-docker allows you to run tests inside docker containers.
     install_requires=[
         'nose',
         'sh',
+        'pyyaml',
     ],
     extras_require={
         'tests': tests_require,

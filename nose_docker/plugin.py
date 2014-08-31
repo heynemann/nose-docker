@@ -22,6 +22,7 @@ from nose.result import TextTestResult
 import sh
 from sh import docker
 
+from nose_docker.config import TestConfig
 
 FAILURE_SELECTOR = CSSSelector('failure')
 ERROR_SELECTOR = CSSSelector('error')
@@ -70,74 +71,54 @@ def process_tests(suite, process):
 class NoseDockerPlugin(Plugin):
     name = "docker"
 
-    #_options = (
-        ##("color", "YANC color override - one of on,off [%s]", "store"),
-    #)
-
-    #def options(self, parser, env):
-        #super(NoseDockerPlugin, self).options(parser, env)
-        #for name, help, action in self._options:
-            #env_opt = "NOSE_YANC_%s" % name.upper()
-            #parser.add_option("--yanc-%s" % name.replace("_", "-"),
-                            #action=action,
-                            #dest="yanc_%s" % name,
-                            #default=env.get(env_opt),
-                            #help=help % env_opt)
-
-    #def configure(self, options, conf):
-        #super(NoseDockerPlugin, self).configure(options, conf)
-        #for name, help, dummy in self._options:
-            #name = "yanc_%s" % name
-            #setattr(self, name, getattr(options, name))
-        #self.color = self.yanc_color != "off" \
-            #and (self.yanc_color == "on"
-                #or (hasattr(self.conf, "stream")
-                    #and hasattr(self.conf.stream, "isatty")
-                    #and self.conf.stream.isatty()))
-
-    #def wantMethod(self, method):
-        #if method.__name__.startswith('test_'):
-            #self.collected_methods.append(method)
-            #return True
-
-        #return False
-
-    #def prepareTest(self, suite):
-        #flattened = []
-        #process_tests(suite, flattened.append)
-
-        #for test_case in flattened:
-            #test_module = test_case.context.__module__
-            #test_case_name = test_case.context.__name__
-
-            #for test in test_case._tests:
-                #test_name = test.test._testMethodName
-
-                #full_name = '%s:%s.%s' % (test_module, test_case_name, test_name)
-
-                ##print docker.run(
-                    ##'--rm',
-                    ##'-v',
-                    ##'%s:/app' % abspath(os.curdir),
-                    ##'dockerfile/python',
-                    ##'/bin/bash',
-                    ##c="cd /app && make setup && echo 'running tests for %s...' && nosetests -sv %s" % (full_name, full_name),
-                ##)
-
-                #self.addSuccess(test)
-
     def prepareTestRunner(self, runner):
-        return TestRunner(runner.stream, verbosity=self.conf.verbosity,
-                                 config=self.conf)
+        return TestRunner(
+            runner.stream, verbosity=self.conf.verbosity,
+            config=self.conf, test_config=self.config, container_tag=self.container_tag
+        )
+
+    def __load_config(self):
+        return TestConfig.load()
+
+    def __build_base_image(self, config):
+        self.container_tag = config.get_container_tag()
+        all_images = docker.images(a=True)
+
+        if self.container_tag in all_images:
+            return
+
+        print ("Container not found or changes in watched files. Rebuilding base container (%s)..." % self.container_tag)
+
+        container_id = docker.run(
+            '-d',
+            '-v',
+            '%s:/app' % abspath(os.curdir),
+            config.base_image,
+            '/bin/bash',
+            c="cd /app && %s" % (
+                " && ".join(config.build_commands)
+            )
+        )
+        container_id = container_id.strip()
+        docker.wait(container_id)
+        docker.commit(container_id, 'nose-docker:%s' % self.container_tag)
 
     def begin(self):
-        pass
+        self.config = self.__load_config()
+        if self.config is None:
+            raise ValueError('Could not find (or could not load) .nose-docker.yaml file. Please make sure you have a valid nose-docker config file.')
+        self.__build_base_image(self.config)
 
     def finalize(self, result):
         pass
 
 
 class TestRunner(nose.core.TextTestRunner):
+    def __init__(self, *args, **kw):
+        self.test_config = kw.pop('test_config')
+        self.container_tag = kw.pop('container_tag')
+        super(TestRunner, self).__init__(*args, **kw)
+
     def get_test_descriptions(self, suite):
         for test_case in suite:
             for test in test_case._tests:
@@ -213,9 +194,9 @@ class TestRunner(nose.core.TextTestRunner):
                 '--rm',
                 '-v',
                 '%s:/app' % abspath(os.curdir),
-                'dockerfile/python',
+                'nose-docker:%s' % self.container_tag,
                 '/bin/bash',
-                c="cd /app && make setup && echo 'running tests for %s...' && nosetests --with-xunit %s; %s" % (
+                c="cd /app && echo 'running tests for %s...' && nosetests --with-xunit %s; %s" % (
                     full_name,
                     full_name,
                     exit_with_proper_code
