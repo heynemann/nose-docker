@@ -89,19 +89,24 @@ class NoseDockerPlugin(Plugin):
 
         print ("Container not found or changes in watched files. Rebuilding base container (%s)..." % self.container_tag)
 
-        container_id = docker.run(
-            '-d',
+        base_name = 'nose-docker-base-%s' % self.container_tag
+
+        all_containers = docker.ps(a=True)
+        if base_name in all_containers:
+            docker.rm('-f', base_name)
+
+        docker.run(
+            '--name=%s' % base_name,
             '-v',
             '%s:/app' % abspath(os.curdir),
             config.base_image,
             '/bin/bash',
             c="cd /app && %s" % (
                 " && ".join(config.build_commands)
-            )
+            ),
+            _out=sys.stdout
         )
-        container_id = container_id.strip()
-        docker.wait(container_id)
-        docker.commit(container_id, 'nose-docker:%s' % self.container_tag)
+        docker.commit('nose-docker-base-%s' % self.container_tag, 'nose-docker:%s' % self.container_tag)
 
     def begin(self):
         self.config = self.__load_config()
@@ -135,6 +140,10 @@ class TestRunner(nose.core.TextTestRunner):
 
         for test_case in flattened:
             test_module = test_case.context.__module__
+
+            if 'nose.' in test_module:
+                continue
+
             test_case_name = test_case.context.__name__
 
             for test in test_case._tests:
